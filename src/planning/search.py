@@ -3,21 +3,23 @@ search.py
 
 Motion planning: find joint-angle sequences to play a melody.
 
-Four strategies:
-  - greedy_plan      : picks the IK solution with least joint travel at each step.
-  - astar_plan       : A* over both IK solutions (elbow-up / elbow-down) per step.
-  - astar_plan_wide  : A* over 6 approach configs per step (2 base IK × 3 theta1
-                       perturbations), giving a wide enough branching factor for
-                       A* to beat greedy on joint-travel cost.
-  - ucs_plan         : uniform-cost search (Dijkstra) over the same wide state
-                       space as astar_plan_wide but with h=0 everywhere.  Proves
-                       the heuristic adds value: UCS and A*-wide must agree on
-                       optimal cost, but A*-wide expands fewer states.
+Four strategies + instrumented variants:
+  - greedy_plan            : picks the IK solution with least joint travel at each step.
+  - astar_plan             : A* over both IK solutions (elbow-up / elbow-down) per step.
+  - astar_plan_wide        : A* over 6 approach configs per step (2 base IK × 3 theta1
+                             perturbations), giving a wide enough branching factor for
+                             A* to beat greedy on joint-travel cost.
+  - ucs_plan               : uniform-cost search (Dijkstra) over the same wide state
+                             space as astar_plan_wide but with h=0 everywhere.
+  - astar_plan_instrumented: like astar_plan_wide but returns PlanResult with
+                             plan, nodes_expanded, and runtime_ms.
+  - ucs_plan_instrumented  : like ucs_plan but returns PlanResult with the same fields.
 """
 
 import heapq
+import time
 import numpy as np
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 from data.keyboard_layout import L1 as _L1, L2 as _L2, BASE as _BASE
 from src.robotics.kinematics import inverse_kinematics, choose_solution
@@ -27,6 +29,13 @@ _THETA1_DELTAS = (-0.1, 0.0, 0.1)
 
 NotePos = Tuple[str, Tuple[float, float]]
 Config = Tuple[float, float]
+
+
+class PlanResult(NamedTuple):
+    """Return type for instrumented search functions."""
+    plan: List[Tuple[str, float, float]]
+    nodes_expanded: int
+    runtime_ms: float
 
 
 def greedy_plan(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
@@ -173,32 +182,37 @@ def _wide_heuristic(
     return min(joint_travel_cost(t1, t2, nt1, nt2) for nt1, nt2 in configs)
 
 
-def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
+def _run_wide_search(
+    note_positions: List[NotePos],
+    use_heuristic: bool,
+) -> PlanResult:
     """
-    A* search over a widened set of approach configurations per melody step.
+    Shared engine for astar_plan_wide and ucs_plan.
 
-    For each note, considers up to 6 configurations (2 base IK solutions ×
-    3 theta1 perturbations of {-0.1, 0, +0.1} rad).  For each perturbation,
-    theta2 is re-solved so that link 2 points along the approach vector from
-    the perturbed elbow toward the key.  This wider branching lets A* find
-    plans with strictly lower total joint travel than greedy_plan.
-
-    Drop-in compatible with astar_plan: same signature and return type.
-    Raises ValueError if no valid plan exists.
+    When use_heuristic=True the priority is f = g + h (_wide_heuristic).
+    When use_heuristic=False, h ≡ 0 so the priority is purely g (Dijkstra).
+    Both modes count every heapq.heappop as one expanded node and measure
+    wall-clock time with time.perf_counter.
     """
     if not note_positions:
-        return []
+        return PlanResult(plan=[], nodes_expanded=0, runtime_ms=0.0)
 
     n = len(note_positions)
-    # heap entry: (f, g, step, t1, t2, path)
+    nodes_expanded = 0
+    t_start = time.perf_counter()
+
+    # Unified heap entry: (f, g, step, t1, t2, path).
+    # For UCS, f == g because h ≡ 0; the extra column costs nothing.
     heap = [(0.0, 0.0, 0, 0.0, 0.0, [])]
     visited: dict = {}
 
     while heap:
         _, g, step, t1, t2, path = heapq.heappop(heap)
+        nodes_expanded += 1
 
         if step == n:
-            return path
+            runtime_ms = (time.perf_counter() - t_start) * 1_000.0
+            return PlanResult(plan=path, nodes_expanded=nodes_expanded, runtime_ms=runtime_ms)
 
         note, pos = note_positions[step]
         for nt1, nt2 in _wide_configs(pos):
@@ -211,52 +225,66 @@ def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, flo
 
             h = (
                 _wide_heuristic((nt1, nt2), note_positions[step + 1][1])
-                if step + 1 < n
+                if (use_heuristic and step + 1 < n)
                 else 0.0
             )
             new_path = path + [(note, nt1, nt2)]
             heapq.heappush(heap, (new_g + h, new_g, step + 1, nt1, nt2, new_path))
 
-    raise ValueError("No valid wide plan found — check that all notes are reachable")
+    raise ValueError("No valid plan found — check that all notes are reachable")
+
+
+def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
+    """
+    A* search over a widened set of approach configurations per melody step.
+
+    For each note, considers up to 6 configurations (2 base IK solutions ×
+    3 theta1 perturbations of {-0.1, 0, +0.1} rad).  For each perturbation,
+    theta2 is re-solved so that link 2 points along the approach vector from
+    the perturbed elbow toward the key.  This wider branching lets A* find
+    plans with strictly lower total joint travel than greedy_plan.
+
+    Drop-in compatible with astar_plan: same signature and return type.
+    For stats (nodes expanded, runtime) use astar_plan_instrumented.
+    Raises ValueError if no valid plan exists.
+    """
+    return _run_wide_search(note_positions, use_heuristic=True).plan
 
 
 def ucs_plan(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
     """
     Uniform-cost search (Dijkstra) over the wide state space.
 
-    Identical to astar_plan_wide except h=0 everywhere: the priority queue is
-    ordered purely by accumulated cost g, with no lookahead.  Both UCS and
-    astar_plan_wide are complete and optimal over the same state space, so they
-    must return plans with identical total joint travel.  Any discrepancy
-    between the two indicates a bug in one of them.
+    Identical to astar_plan_wide except h=0 everywhere.  Both must return
+    plans with identical total joint travel; any discrepancy indicates a bug.
 
-    Same signature and return type as astar_plan_wide.
+    For stats (nodes expanded, runtime) use ucs_plan_instrumented.
     Raises ValueError if no valid plan exists.
     """
-    if not note_positions:
-        return []
+    return _run_wide_search(note_positions, use_heuristic=False).plan
 
-    n = len(note_positions)
-    # heap entry: (g, step, t1, t2, path) — no f column needed since h ≡ 0
-    heap = [(0.0, 0, 0.0, 0.0, [])]
-    visited: dict = {}
 
-    while heap:
-        g, step, t1, t2, path = heapq.heappop(heap)
+def astar_plan_instrumented(note_positions: List[NotePos]) -> PlanResult:
+    """
+    Like astar_plan_wide but returns a PlanResult with:
+      .plan           — list of (note, theta1, theta2)
+      .nodes_expanded — number of nodes popped from the priority queue
+      .runtime_ms     — wall-clock time in milliseconds
 
-        if step == n:
-            return path
+    Use this to measure how much the admissible heuristic reduces search effort
+    compared to ucs_plan_instrumented.
+    """
+    return _run_wide_search(note_positions, use_heuristic=True)
 
-        note, pos = note_positions[step]
-        for nt1, nt2 in _wide_configs(pos):
-            new_g = g + joint_travel_cost(t1, t2, nt1, nt2)
 
-            state_key = (step + 1, round(nt1, 4), round(nt2, 4))
-            if state_key in visited and visited[state_key] <= new_g:
-                continue
-            visited[state_key] = new_g
+def ucs_plan_instrumented(note_positions: List[NotePos]) -> PlanResult:
+    """
+    Like ucs_plan but returns a PlanResult with:
+      .plan           — list of (note, theta1, theta2)
+      .nodes_expanded — number of nodes popped from the priority queue
+      .runtime_ms     — wall-clock time in milliseconds
 
-            new_path = path + [(note, nt1, nt2)]
-            heapq.heappush(heap, (new_g, step + 1, nt1, nt2, new_path))
-
-    raise ValueError("No valid UCS plan found — check that all notes are reachable")
+    Baseline for comparing against astar_plan_instrumented: same optimal cost,
+    more nodes expanded (no heuristic to prune the frontier).
+    """
+    return _run_wide_search(note_positions, use_heuristic=False)
