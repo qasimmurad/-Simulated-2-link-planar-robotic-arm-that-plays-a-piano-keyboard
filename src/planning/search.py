@@ -3,17 +3,23 @@ search.py
 
 Motion planning: find joint-angle sequences to play a melody.
 
-Two strategies:
-  - greedy_plan  : picks the IK solution with least joint travel at each step.
-  - astar_plan   : A* over both IK solutions at each step; globally optimal
-                   joint-travel under the single-step heuristic.
+Three strategies:
+  - greedy_plan      : picks the IK solution with least joint travel at each step.
+  - astar_plan       : A* over both IK solutions (elbow-up / elbow-down) per step.
+  - astar_plan_wide  : A* over 6 approach configs per step (2 base IK × 3 theta1
+                       perturbations), giving a wide enough branching factor for
+                       A* to beat greedy on joint-travel cost.
 """
 
 import heapq
+import numpy as np
 from typing import List, Tuple
 
+from data.keyboard_layout import L1 as _L1, L2 as _L2, BASE as _BASE
 from src.robotics.kinematics import inverse_kinematics, choose_solution
 from src.planning.heuristics import joint_travel_cost, joint_space_heuristic
+
+_THETA1_DELTAS = (-0.1, 0.0, 0.1)
 
 NotePos = Tuple[str, Tuple[float, float]]
 Config = Tuple[float, float]
@@ -100,3 +106,111 @@ def total_joint_travel(plan: List[Tuple[str, float, float]]) -> float:
         _, t1b, t2b = plan[i]
         total += joint_travel_cost(t1a, t2a, t1b, t2b)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Wide-state helpers
+# ---------------------------------------------------------------------------
+
+def _wide_configs(
+    pos: Tuple[float, float],
+    base: Tuple[float, float] = _BASE,
+    l1: float = _L1,
+    l2: float = _L2,
+) -> List[Tuple[float, float]]:
+    """
+    Generate up to 6 candidate (theta1, theta2) configurations for a key at pos.
+
+    For each base IK solution (elbow-up and elbow-down), perturbs theta1 by
+    each value in _THETA1_DELTAS and re-solves theta2 so that link 2 points
+    along the approach vector from the new elbow position toward the key.
+    This widens the branching factor from 2 to up to 6 per melody step.
+    """
+    bx, by = base
+    px, py = pos
+    candidates: List[Tuple[float, float]] = []
+
+    for elbow_up in (True, False):
+        base_sol = inverse_kinematics(pos, base=base, l1=l1, l2=l2, elbow_up=elbow_up)
+        if base_sol is None:
+            continue
+        theta1_base, _ = base_sol
+
+        for delta in _THETA1_DELTAS:
+            new_t1 = theta1_base + delta
+            # Perturbed elbow position
+            ex = bx + l1 * np.cos(new_t1)
+            ey = by + l1 * np.sin(new_t1)
+            dx, dy = px - ex, py - ey
+            if np.hypot(dx, dy) < 1e-9:
+                continue
+            # theta2 that points link 2 along the approach vector toward the key
+            new_t2 = np.arctan2(dy, dx) - new_t1
+            candidates.append((float(new_t1), float(new_t2)))
+
+    return candidates
+
+
+def _wide_heuristic(
+    current_angles: Tuple[float, float],
+    target_pos: Tuple[float, float],
+) -> float:
+    """
+    Admissible heuristic for astar_plan_wide.
+
+    Returns the minimum joint travel over all wide candidate configs for
+    target_pos. Admissible because it never exceeds the true optimal cost
+    to reach any valid configuration for that note.
+    """
+    configs = _wide_configs(target_pos)
+    if not configs:
+        return float("inf")
+    t1, t2 = current_angles
+    return min(joint_travel_cost(t1, t2, nt1, nt2) for nt1, nt2 in configs)
+
+
+def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
+    """
+    A* search over a widened set of approach configurations per melody step.
+
+    For each note, considers up to 6 configurations (2 base IK solutions ×
+    3 theta1 perturbations of {-0.1, 0, +0.1} rad).  For each perturbation,
+    theta2 is re-solved so that link 2 points along the approach vector from
+    the perturbed elbow toward the key.  This wider branching lets A* find
+    plans with strictly lower total joint travel than greedy_plan.
+
+    Drop-in compatible with astar_plan: same signature and return type.
+    Raises ValueError if no valid plan exists.
+    """
+    if not note_positions:
+        return []
+
+    n = len(note_positions)
+    # heap entry: (f, g, step, t1, t2, path)
+    heap = [(0.0, 0.0, 0, 0.0, 0.0, [])]
+    visited: dict = {}
+
+    while heap:
+        _, g, step, t1, t2, path = heapq.heappop(heap)
+
+        if step == n:
+            return path
+
+        note, pos = note_positions[step]
+        for nt1, nt2 in _wide_configs(pos):
+            new_g = g + joint_travel_cost(t1, t2, nt1, nt2)
+
+            state_key = (step + 1, round(nt1, 4), round(nt2, 4))
+            if state_key in visited and visited[state_key] <= new_g:
+                continue
+            visited[state_key] = new_g
+
+            h = (
+                _wide_heuristic((nt1, nt2), note_positions[step + 1][1])
+                if step + 1 < n
+                else 0.0
+            )
+            new_path = path + [(note, nt1, nt2)]
+            heapq.heappush(heap, (new_g + h, new_g, step + 1, nt1, nt2, new_path))
+
+    raise ValueError("No valid wide plan found — check that all notes are reachable")
