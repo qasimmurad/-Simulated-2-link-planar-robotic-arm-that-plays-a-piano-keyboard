@@ -8,7 +8,7 @@ import pytest
 from src.music.resolver import resolve_melody, TWINKLE, MARY
 from src.planning.search import (
     greedy_plan, astar_plan, astar_plan_wide, ucs_plan,
-    astar_plan_instrumented, ucs_plan_instrumented,
+    astar_plan_wide_instrumented, ucs_plan_instrumented,
     PlanResult, total_joint_travel, _wide_configs,
 )
 from src.planning.heuristics import joint_travel_cost
@@ -180,7 +180,7 @@ def test_ucs_raises_on_unreachable():
 # --- instrumented function tests ---
 
 def test_astar_instrumented_returns_plan_result():
-    result = astar_plan_instrumented(resolve_melody(TWINKLE))
+    result = astar_plan_wide_instrumented(resolve_melody(TWINKLE))
     assert isinstance(result, PlanResult)
 
 
@@ -190,21 +190,21 @@ def test_ucs_instrumented_returns_plan_result():
 
 
 def test_instrumented_plan_field_is_list():
-    for fn in (astar_plan_instrumented, ucs_plan_instrumented):
+    for fn in (astar_plan_wide_instrumented, ucs_plan_instrumented):
         result = fn(resolve_melody(TWINKLE))
         assert isinstance(result.plan, list)
         assert len(result.plan) == len(resolve_melody(TWINKLE))
 
 
 def test_instrumented_nodes_expanded_is_positive_int():
-    for fn in (astar_plan_instrumented, ucs_plan_instrumented):
+    for fn in (astar_plan_wide_instrumented, ucs_plan_instrumented):
         result = fn(resolve_melody(TWINKLE))
         assert isinstance(result.nodes_expanded, int)
         assert result.nodes_expanded > 0
 
 
 def test_instrumented_runtime_ms_is_nonneg_float():
-    for fn in (astar_plan_instrumented, ucs_plan_instrumented):
+    for fn in (astar_plan_wide_instrumented, ucs_plan_instrumented):
         result = fn(resolve_melody(TWINKLE))
         assert isinstance(result.runtime_ms, float)
         assert result.runtime_ms >= 0.0
@@ -214,7 +214,7 @@ def test_instrumented_cost_matches_uninstrumented():
     """Instrumented wrappers must return the exact same plan cost as the plain functions."""
     pos = resolve_melody(TWINKLE)
     assert abs(
-        total_joint_travel(astar_plan_instrumented(pos).plan)
+        total_joint_travel(astar_plan_wide_instrumented(pos).plan)
         - total_joint_travel(astar_plan_wide(pos))
     ) < 1e-9
     assert abs(
@@ -226,7 +226,7 @@ def test_instrumented_cost_matches_uninstrumented():
 def test_ucs_expands_more_nodes_than_astar():
     """UCS has no heuristic so it must expand at least as many nodes as A*-wide."""
     pos = resolve_melody(TWINKLE)
-    astar_nodes = astar_plan_instrumented(pos).nodes_expanded
+    astar_nodes = astar_plan_wide_instrumented(pos).nodes_expanded
     ucs_nodes   = ucs_plan_instrumented(pos).nodes_expanded
     assert ucs_nodes >= astar_nodes, (
         f"UCS expanded {ucs_nodes} nodes but A* expanded {astar_nodes} — "
@@ -235,7 +235,7 @@ def test_ucs_expands_more_nodes_than_astar():
 
 
 def test_instrumented_empty_melody():
-    for fn in (astar_plan_instrumented, ucs_plan_instrumented):
+    for fn in (astar_plan_wide_instrumented, ucs_plan_instrumented):
         result = fn([])
         assert result.plan == []
         assert result.nodes_expanded == 0
@@ -243,6 +243,6 @@ def test_instrumented_empty_melody():
 
 
 def test_instrumented_raises_on_unreachable():
-    for fn in (astar_plan_instrumented, ucs_plan_instrumented):
+    for fn in (astar_plan_wide_instrumented, ucs_plan_instrumented):
         with pytest.raises(ValueError):
             fn([("X99", (100.0, 100.0))])

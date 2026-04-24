@@ -11,7 +11,7 @@ Four strategies + instrumented variants:
                              A* to beat greedy on joint-travel cost.
   - ucs_plan               : uniform-cost search (Dijkstra) over the same wide state
                              space as astar_plan_wide but with h=0 everywhere.
-  - astar_plan_instrumented: like astar_plan_wide but returns PlanResult with
+  - astar_plan_wide_instrumented: like astar_plan_wide but returns PlanResult with
                              plan, nodes_expanded, and runtime_ms.
   - ucs_plan_instrumented  : like ucs_plan but returns PlanResult with the same fields.
 """
@@ -245,7 +245,7 @@ def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, flo
     plans with strictly lower total joint travel than greedy_plan.
 
     Drop-in compatible with astar_plan: same signature and return type.
-    For stats (nodes expanded, runtime) use astar_plan_instrumented.
+    For stats (nodes expanded, runtime) use astar_plan_wide_instrumented.
     Raises ValueError if no valid plan exists.
     """
     return _run_wide_search(note_positions, use_heuristic=True).plan
@@ -264,7 +264,7 @@ def ucs_plan(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
     return _run_wide_search(note_positions, use_heuristic=False).plan
 
 
-def astar_plan_instrumented(note_positions: List[NotePos]) -> PlanResult:
+def astar_plan_wide_instrumented(note_positions: List[NotePos]) -> PlanResult:
     """
     Like astar_plan_wide but returns a PlanResult with:
       .plan           — list of (note, theta1, theta2)
@@ -275,6 +275,10 @@ def astar_plan_instrumented(note_positions: List[NotePos]) -> PlanResult:
     compared to ucs_plan_instrumented.
     """
     return _run_wide_search(note_positions, use_heuristic=True)
+
+
+# Backward-compatible alias added in Task 3 under a shorter name.
+astar_plan_instrumented = astar_plan_wide_instrumented
 
 
 def ucs_plan_instrumented(note_positions: List[NotePos]) -> PlanResult:
