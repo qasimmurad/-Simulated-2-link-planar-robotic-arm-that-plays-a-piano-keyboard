@@ -5,7 +5,7 @@ Unit tests for motion planning (search and heuristics).
 """
 
 import pytest
-from src.music.resolver import resolve_melody, TWINKLE, MARY
+from src.music.resolver import resolve_melody, TWINKLE, MARY, MELODIES, ODE_TO_JOY
 from src.planning.search import (
     greedy_plan, astar_plan, astar_plan_wide, ucs_plan,
     astar_plan_wide_instrumented, ucs_plan_instrumented,
@@ -451,3 +451,53 @@ def test_combined_expands_fewer_nodes_than_euclidean():
         f"Combined expanded {comb_nodes} nodes but euclidean expanded {eu_nodes} — "
         "combined heuristic should be at least as tight"
     )
+
+
+# --- Task 8: optimality and admissibility cross-checks ---
+
+def test_astar_wide_beats_greedy_on_twinkle():
+    """A* wide must find strictly lower cost than greedy — the core search claim."""
+    positions = resolve_melody(TWINKLE)
+    g_cost = total_joint_travel(greedy_plan(positions))
+    a_cost = total_joint_travel(astar_plan_wide(positions))
+    assert a_cost < g_cost, (
+        f"A* wide ({a_cost:.4f}) should beat greedy ({g_cost:.4f})"
+    )
+
+def test_ucs_equals_astar_wide_all_melodies():
+    """UCS and A* wide must agree on optimal cost — proves heuristic admissibility."""
+    for name, notes in MELODIES.items():
+        positions = resolve_melody(notes)
+        u = ucs_plan_instrumented(positions)
+        a = astar_plan_wide_instrumented(positions)
+        assert abs(total_joint_travel(u.plan) - total_joint_travel(a.plan)) < 1e-6, (
+            f"UCS and A* disagree on {name}: "
+            f"ucs={total_joint_travel(u.plan):.4f}, "
+            f"astar={total_joint_travel(a.plan):.4f}"
+        )
+
+def test_astar_expands_fewer_nodes_than_ucs():
+    """A* with admissible heuristic must expand fewer nodes than UCS."""
+    positions = resolve_melody(TWINKLE)
+    u = ucs_plan_instrumented(positions)
+    a = astar_plan_wide_instrumented(positions)
+    assert a.nodes_expanded < u.nodes_expanded, (
+        f"A* ({a.nodes_expanded} nodes) should expand fewer than "
+        f"UCS ({u.nodes_expanded} nodes)"
+    )
+
+def test_euclidean_heuristic_inadmissible_counterexample():
+    """Documents that h_euclidean is inadmissible on wide configs."""
+    from src.planning.heuristics import h_euclidean_endeffector
+    from src.planning.search import _wide_configs
+    positions = resolve_melody(ODE_TO_JOY)
+    for i in range(len(positions) - 1):
+        if positions[i][0] == positions[i+1][0]:
+            note, pos = positions[i]
+            configs = _wide_configs(pos)
+            for cfg in configs:
+                h_est = h_euclidean_endeffector(cfg, pos)
+                if h_est > 1e-6:
+                    assert h_est > 0
+                    return
+    pytest.skip("No same-note transition found")
