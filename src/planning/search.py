@@ -3,12 +3,16 @@ search.py
 
 Motion planning: find joint-angle sequences to play a melody.
 
-Three strategies:
+Four strategies:
   - greedy_plan      : picks the IK solution with least joint travel at each step.
   - astar_plan       : A* over both IK solutions (elbow-up / elbow-down) per step.
   - astar_plan_wide  : A* over 6 approach configs per step (2 base IK × 3 theta1
                        perturbations), giving a wide enough branching factor for
                        A* to beat greedy on joint-travel cost.
+  - ucs_plan         : uniform-cost search (Dijkstra) over the same wide state
+                       space as astar_plan_wide but with h=0 everywhere.  Proves
+                       the heuristic adds value: UCS and A*-wide must agree on
+                       optimal cost, but A*-wide expands fewer states.
 """
 
 import heapq
@@ -214,3 +218,45 @@ def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, flo
             heapq.heappush(heap, (new_g + h, new_g, step + 1, nt1, nt2, new_path))
 
     raise ValueError("No valid wide plan found — check that all notes are reachable")
+
+
+def ucs_plan(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
+    """
+    Uniform-cost search (Dijkstra) over the wide state space.
+
+    Identical to astar_plan_wide except h=0 everywhere: the priority queue is
+    ordered purely by accumulated cost g, with no lookahead.  Both UCS and
+    astar_plan_wide are complete and optimal over the same state space, so they
+    must return plans with identical total joint travel.  Any discrepancy
+    between the two indicates a bug in one of them.
+
+    Same signature and return type as astar_plan_wide.
+    Raises ValueError if no valid plan exists.
+    """
+    if not note_positions:
+        return []
+
+    n = len(note_positions)
+    # heap entry: (g, step, t1, t2, path) — no f column needed since h ≡ 0
+    heap = [(0.0, 0, 0.0, 0.0, [])]
+    visited: dict = {}
+
+    while heap:
+        g, step, t1, t2, path = heapq.heappop(heap)
+
+        if step == n:
+            return path
+
+        note, pos = note_positions[step]
+        for nt1, nt2 in _wide_configs(pos):
+            new_g = g + joint_travel_cost(t1, t2, nt1, nt2)
+
+            state_key = (step + 1, round(nt1, 4), round(nt2, 4))
+            if state_key in visited and visited[state_key] <= new_g:
+                continue
+            visited[state_key] = new_g
+
+            new_path = path + [(note, nt1, nt2)]
+            heapq.heappush(heap, (new_g, step + 1, nt1, nt2, new_path))
+
+    raise ValueError("No valid UCS plan found — check that all notes are reachable")

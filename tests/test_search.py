@@ -7,7 +7,7 @@ Unit tests for motion planning (search and heuristics).
 import pytest
 from src.music.resolver import resolve_melody, TWINKLE, MARY
 from src.planning.search import (
-    greedy_plan, astar_plan, astar_plan_wide, total_joint_travel, _wide_configs,
+    greedy_plan, astar_plan, astar_plan_wide, ucs_plan, total_joint_travel, _wide_configs,
 )
 from src.planning.heuristics import joint_travel_cost
 from data.keyboard_layout import ALL_KEYS
@@ -129,3 +129,47 @@ def test_astar_wide_no_worse_than_astar():
 def test_astar_wide_raises_on_unreachable():
     with pytest.raises(ValueError):
         astar_plan_wide([("X99", (100.0, 100.0))])
+
+
+# --- ucs_plan tests ---
+
+def test_ucs_plan_length():
+    note_positions = resolve_melody(TWINKLE)
+    plan = ucs_plan(note_positions)
+    assert len(plan) == len(note_positions)
+
+
+def test_ucs_plan_returns_floats():
+    note_positions = resolve_melody(TWINKLE)
+    for _, t1, t2 in ucs_plan(note_positions):
+        assert isinstance(t1, float)
+        assert isinstance(t2, float)
+
+
+def test_ucs_matches_astar_wide_cost_twinkle():
+    """UCS and A*-wide operate on the same state space so must find equal optimal costs."""
+    note_positions = resolve_melody(TWINKLE)
+    ucs_cost  = total_joint_travel(ucs_plan(note_positions))
+    wide_cost = total_joint_travel(astar_plan_wide(note_positions))
+    assert abs(ucs_cost - wide_cost) < 1e-6, (
+        f"UCS ({ucs_cost:.6f}) and A*-wide ({wide_cost:.6f}) disagree — "
+        "one of them has a bug"
+    )
+
+
+def test_ucs_matches_astar_wide_cost_mary():
+    note_positions = resolve_melody(MARY)
+    ucs_cost  = total_joint_travel(ucs_plan(note_positions))
+    wide_cost = total_joint_travel(astar_plan_wide(note_positions))
+    assert abs(ucs_cost - wide_cost) < 1e-6, (
+        f"UCS ({ucs_cost:.6f}) and A*-wide ({wide_cost:.6f}) disagree on Mary"
+    )
+
+
+def test_ucs_empty_melody():
+    assert ucs_plan([]) == []
+
+
+def test_ucs_raises_on_unreachable():
+    with pytest.raises(ValueError):
+        ucs_plan([("X99", (100.0, 100.0))])
