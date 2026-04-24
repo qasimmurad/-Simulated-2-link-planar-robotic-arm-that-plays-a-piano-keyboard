@@ -23,7 +23,11 @@ from typing import List, NamedTuple, Tuple
 
 from data.keyboard_layout import L1 as _L1, L2 as _L2, BASE as _BASE
 from src.robotics.kinematics import inverse_kinematics, choose_solution
-from src.planning.heuristics import joint_travel_cost, joint_space_heuristic
+from src.planning.heuristics import (
+    joint_travel_cost,
+    joint_space_heuristic,
+    h_euclidean_endeffector,
+)
 
 _THETA1_DELTAS = (-0.1, 0.0, 0.1)
 
@@ -182,15 +186,33 @@ def _wide_heuristic(
     return min(joint_travel_cost(t1, t2, nt1, nt2) for nt1, nt2 in configs)
 
 
+def _h_combined_wide(current_angles, target_pos) -> float:
+    """
+    Wide-search combined heuristic: max(_wide_heuristic, h_euclidean_endeffector).
+
+    Admissible for the same reason as h_combined in heuristics.py: both
+    components are individually admissible lower bounds, and max() of two
+    admissible heuristics is still admissible but tighter than either alone.
+
+    Uses _wide_heuristic (6 configs) rather than joint_space_heuristic (2
+    configs) so the joint-space component is as tight as possible.
+    """
+    return max(
+        _wide_heuristic(current_angles, target_pos),
+        h_euclidean_endeffector(current_angles, target_pos),
+    )
+
+
 def _run_wide_search(
     note_positions: List[NotePos],
-    use_heuristic: bool,
+    heuristic=None,
 ) -> PlanResult:
     """
-    Shared engine for astar_plan_wide and ucs_plan.
+    Shared engine for all wide-state planners.
 
-    When use_heuristic=True the priority is f = g + h (_wide_heuristic).
-    When use_heuristic=False, h ≡ 0 so the priority is purely g (Dijkstra).
+    heuristic : callable(current_angles, next_pos) -> float, or None.
+        If None, h ≡ 0 everywhere (Dijkstra/UCS).
+        Any admissible callable can be passed (joint-space, euclidean, combined).
     Both modes count every heapq.heappop as one expanded node and measure
     wall-clock time with time.perf_counter.
     """
@@ -202,7 +224,7 @@ def _run_wide_search(
     t_start = time.perf_counter()
 
     # Unified heap entry: (f, g, step, t1, t2, path).
-    # For UCS, f == g because h ≡ 0; the extra column costs nothing.
+    # When heuristic is None, f == g; the extra column costs nothing.
     heap = [(0.0, 0.0, 0, 0.0, 0.0, [])]
     visited: dict = {}
 
@@ -224,8 +246,8 @@ def _run_wide_search(
             visited[state_key] = new_g
 
             h = (
-                _wide_heuristic((nt1, nt2), note_positions[step + 1][1])
-                if (use_heuristic and step + 1 < n)
+                heuristic((nt1, nt2), note_positions[step + 1][1])
+                if (heuristic is not None and step + 1 < n)
                 else 0.0
             )
             new_path = path + [(note, nt1, nt2)]
@@ -248,7 +270,7 @@ def astar_plan_wide(note_positions: List[NotePos]) -> List[Tuple[str, float, flo
     For stats (nodes expanded, runtime) use astar_plan_wide_instrumented.
     Raises ValueError if no valid plan exists.
     """
-    return _run_wide_search(note_positions, use_heuristic=True).plan
+    return _run_wide_search(note_positions, heuristic=_wide_heuristic).plan
 
 
 def ucs_plan(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
@@ -261,34 +283,40 @@ def ucs_plan(note_positions: List[NotePos]) -> List[Tuple[str, float, float]]:
     For stats (nodes expanded, runtime) use ucs_plan_instrumented.
     Raises ValueError if no valid plan exists.
     """
-    return _run_wide_search(note_positions, use_heuristic=False).plan
+    return _run_wide_search(note_positions, heuristic=None).plan
 
 
 def astar_plan_wide_instrumented(note_positions: List[NotePos]) -> PlanResult:
     """
-    Like astar_plan_wide but returns a PlanResult with:
-      .plan           — list of (note, theta1, theta2)
-      .nodes_expanded — number of nodes popped from the priority queue
-      .runtime_ms     — wall-clock time in milliseconds
-
-    Use this to measure how much the admissible heuristic reduces search effort
-    compared to ucs_plan_instrumented.
+    Like astar_plan_wide but returns a PlanResult (plan, nodes_expanded, runtime_ms).
+    Heuristic: _wide_heuristic (joint-space, 6 wide configs).
     """
-    return _run_wide_search(note_positions, use_heuristic=True)
+    return _run_wide_search(note_positions, heuristic=_wide_heuristic)
 
 
-# Backward-compatible alias added in Task 3 under a shorter name.
+# Backward-compatible alias kept from Task 3.
 astar_plan_instrumented = astar_plan_wide_instrumented
 
 
 def ucs_plan_instrumented(note_positions: List[NotePos]) -> PlanResult:
     """
-    Like ucs_plan but returns a PlanResult with:
-      .plan           — list of (note, theta1, theta2)
-      .nodes_expanded — number of nodes popped from the priority queue
-      .runtime_ms     — wall-clock time in milliseconds
-
-    Baseline for comparing against astar_plan_instrumented: same optimal cost,
-    more nodes expanded (no heuristic to prune the frontier).
+    Like ucs_plan but returns a PlanResult (plan, nodes_expanded, runtime_ms).
+    h ≡ 0 — baseline for measuring heuristic value.
     """
-    return _run_wide_search(note_positions, use_heuristic=False)
+    return _run_wide_search(note_positions, heuristic=None)
+
+
+def astar_plan_wide_instrumented_euclidean(note_positions: List[NotePos]) -> PlanResult:
+    """
+    Like astar_plan_wide but returns a PlanResult (plan, nodes_expanded, runtime_ms).
+    Heuristic: h_euclidean_endeffector — Euclidean tip distance / (L1+L2).
+    """
+    return _run_wide_search(note_positions, heuristic=h_euclidean_endeffector)
+
+
+def astar_plan_wide_instrumented_combined(note_positions: List[NotePos]) -> PlanResult:
+    """
+    Like astar_plan_wide but returns a PlanResult (plan, nodes_expanded, runtime_ms).
+    Heuristic: _h_combined_wide — max(joint-space wide, euclidean end-effector).
+    """
+    return _run_wide_search(note_positions, heuristic=_h_combined_wide)
