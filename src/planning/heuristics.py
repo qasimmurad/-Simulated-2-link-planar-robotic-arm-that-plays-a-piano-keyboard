@@ -33,23 +33,35 @@ def h_euclidean_endeffector(
     l2=_L2,
 ) -> float:
     """
-    Admissible heuristic: Euclidean end-effector distance scaled by (L1+L2).
+    Heuristic estimate: Euclidean end-effector distance scaled by (L1+L2).
 
-    Derivation (admissibility proof)
-    ---------------------------------
-    For a 2-link planar arm the tip displacement satisfies:
+    Admissibility — conditional
+    ---------------------------
+    The Jacobian bound gives:
 
-        ||Δtip||₂  ≤  ||J₁||₂·|Δθ₁| + ||J₂||₂·|Δθ₂|
-                    ≤  (L1+L2)·|Δθ₁|  +  L2·|Δθ₂|
+        ||Δtip||₂  ≤  (L1+L2)·|Δθ₁|  +  L2·|Δθ₂|
                     ≤  (L1+L2)·(|Δθ₁| + |Δθ₂|)
-
-    where ||J₁||₂ = sqrt(L1²+L2²+2L1L2 cos θ₂) ≤ L1+L2 and ||J₂||₂ = L2.
 
     Rearranging: |Δθ₁| + |Δθ₂|  ≥  ||Δtip||₂ / (L1+L2)
 
-    So h = d / (L1+L2)  is a lower bound on total joint travel, hence admissible.
-    The bound is tight when the arm is fully extended (θ₂=0) and the shoulder
-    joint alone drives the tip directly along the straight-line path to target.
+    This bound holds when the goal configuration places the arm tip EXACTLY
+    at target_pos.  It is then a genuine lower bound on joint travel, hence
+    admissible for planners that only consider exact IK solutions (astar_plan,
+    greedy_plan).
+
+    Inadmissibility in the wide-search context
+    ------------------------------------------
+    _run_wide_search uses _wide_configs, which includes perturbed
+    configurations (theta1 ± 0.1 rad) that POINT link-2 toward target_pos
+    but whose tip does NOT land exactly there (because L2 ≠ distance from the
+    perturbed elbow to the target in general).  The cost to transition from
+    such a perturbed config to an identical config at the next step is zero,
+    yet h = d/(L1+L2) > 0 because the perturbed tip is displaced from
+    target_pos.  This violates the admissibility condition.
+
+    Counterexample (empirically verified on Ode to Joy):
+        E4→E4 (repeated note), perturbed wide config:
+        h_est ≈ 0.052,  min_actual_joint_travel = 0.000
     """
     _, _, tip = forward_kinematics(current_angles[0], current_angles[1], base=base, l1=l1, l2=l2)
     d = np.hypot(tip[0] - target_pos[0], tip[1] - target_pos[1])
@@ -58,20 +70,24 @@ def h_euclidean_endeffector(
 
 def h_combined(current_angles, target_pos) -> float:
     """
-    Admissible combined heuristic: max(joint_space_heuristic, h_euclidean_endeffector).
+    Combined heuristic: max(joint_space_heuristic, h_euclidean_endeffector).
 
-    Admissibility proof
-    -------------------
-    Both component heuristics are individually admissible (each ≤ true cost).
-    The maximum of two values that are both ≤ X is itself ≤ X, so max() preserves
-    admissibility while producing a tighter (higher) lower bound than either alone.
+    Admissibility — conditional (same caveat as h_euclidean_endeffector)
+    --------------------------------------------------------------------
+    When both components are admissible (i.e., for planners using only exact
+    IK configurations), max() of two admissible lower bounds is itself an
+    admissible lower bound — it is tighter than either component alone without
+    the double-counting risk of sum().
+
+    When h_euclidean_endeffector is inadmissible (wide-search context with
+    perturbed configs), h_combined inherits that inadmissibility: max() of an
+    admissible value and an inadmissible value can still overestimate.
 
     Why max() and not sum()
     -----------------------
-    sum() of two admissible heuristics is NOT generally admissible: if h1 ≤ h*
-    and h2 ≤ h* independently, h1+h2 can exceed h* when both measure overlapping
-    portions of the same true cost. max() avoids this because it selects the
-    single best lower bound at each state rather than double-counting.
+    sum() of two admissible heuristics is NOT generally admissible: h1 ≤ h*
+    and h2 ≤ h* do NOT guarantee h1+h2 ≤ h* when both bound the same true
+    cost.  max() avoids double-counting by selecting the single best bound.
     """
     return max(
         joint_space_heuristic(current_angles, target_pos),

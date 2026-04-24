@@ -175,9 +175,10 @@ def _wide_heuristic(
     """
     Admissible heuristic for astar_plan_wide.
 
-    Returns the minimum joint travel over all wide candidate configs for
-    target_pos. Admissible because it never exceeds the true optimal cost
-    to reach any valid configuration for that note.
+    Returns the minimum joint travel over all 6 wide candidate configs for
+    target_pos.  Admissible because the set of wide configs is exactly the
+    set of successor states _run_wide_search considers at the next step, so
+    this is the exact one-step lower bound — it can never overestimate.
     """
     configs = _wide_configs(target_pos)
     if not configs:
@@ -190,12 +191,15 @@ def _h_combined_wide(current_angles, target_pos) -> float:
     """
     Wide-search combined heuristic: max(_wide_heuristic, h_euclidean_endeffector).
 
-    Admissible for the same reason as h_combined in heuristics.py: both
-    components are individually admissible lower bounds, and max() of two
-    admissible heuristics is still admissible but tighter than either alone.
+    _wide_heuristic is admissible in the wide-search context (see its docstring).
+    h_euclidean_endeffector is NOT admissible in the wide-search context: perturbed
+    configs whose tips do not reach target_pos can be overestimated (empirically
+    verified on Ode to Joy).  max() inherits that inadmissibility.
 
-    Uses _wide_heuristic (6 configs) rather than joint_space_heuristic (2
-    configs) so the joint-space component is as tight as possible.
+    In practice this heuristic expands fewer nodes than either component alone
+    and finds the optimal cost on Twinkle and Mary, but can return a suboptimal
+    plan on melodies where the inadmissible euclidean component fires (Ode to Joy).
+    Use astar_plan_wide (which uses _wide_heuristic alone) when optimality is required.
     """
     return max(
         _wide_heuristic(current_angles, target_pos),

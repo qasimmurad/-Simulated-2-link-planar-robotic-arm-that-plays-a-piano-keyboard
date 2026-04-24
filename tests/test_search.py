@@ -259,40 +259,94 @@ from src.planning.search import (
 )
 
 
-def test_h_euclidean_is_admissible():
-    """h_euclidean_endeffector must never exceed the true one-step joint travel."""
+def test_h_euclidean_admissible_for_exact_ik_configs():
+    """
+    h_euclidean_endeffector is admissible when the starting config is an exact
+    IK solution (tip lands exactly at the previous target).  The Jacobian bound
+    proof holds in that case.  This test verifies the property for C4→G4.
+    """
     from src.robotics.kinematics import inverse_kinematics
+    from src.planning.heuristics import joint_travel_cost
     pos_c4 = ALL_KEYS["C4"]
     pos_g4 = ALL_KEYS["G4"]
-    # use IK elbow-up for C4 as the starting config
+    # exact IK solution — tip is at C4
     start = inverse_kinematics(pos_c4, elbow_up=True)
     assert start is not None
     h = h_euclidean_endeffector(start, pos_g4)
-    # true cost: min joint travel over both IK solutions for G4
+    # true minimum cost: cheapest exact IK solution for G4
+    costs = [
+        joint_travel_cost(start[0], start[1], sol[0], sol[1])
+        for eu in (True, False)
+        for sol in [inverse_kinematics(pos_g4, elbow_up=eu)]
+        if sol is not None
+    ]
+    assert h <= min(costs) + 1e-9, (
+        f"h_euclidean ({h:.6f}) exceeds true cost ({min(costs):.6f}) "
+        "for exact IK start config"
+    )
+
+
+def test_euclidean_heuristic_admissibility():
+    """
+    Demonstrate that h_euclidean_endeffector is INADMISSIBLE in the wide-search
+    context.
+
+    _run_wide_search uses _wide_configs, which includes perturbed configurations
+    (theta1 ± 0.1 rad) whose arm tip does NOT land exactly at the target position.
+    For a repeated note (e.g. E4→E4), the minimum joint travel is 0 (stay in the
+    same perturbed config), yet h_euclidean_endeffector returns a positive value
+    because the perturbed tip is displaced from the note position.
+
+    This test actively finds and asserts a concrete overestimate, confirming
+    inadmissibility.  It is not marked xfail — the counterexample is the point.
+    """
+    from src.music.resolver import resolve_melody, ODE_TO_JOY
     from src.planning.heuristics import joint_travel_cost
-    costs = []
-    for eu in (True, False):
-        sol = inverse_kinematics(pos_g4, elbow_up=eu)
-        if sol is not None:
-            costs.append(joint_travel_cost(start[0], start[1], sol[0], sol[1]))
-    true_cost = min(costs)
-    assert h <= true_cost + 1e-9, (
-        f"h_euclidean ({h:.6f}) exceeds true cost ({true_cost:.6f})"
+
+    positions = resolve_melody(ODE_TO_JOY)
+    counterexample_found = False
+
+    for i in range(len(positions) - 1):
+        _, pos_a = positions[i]
+        _, pos_b = positions[i + 1]
+        configs_a = _wide_configs(pos_a)
+        configs_b = _wide_configs(pos_b)
+
+        for ca in configs_a:
+            h_est = h_euclidean_endeffector(ca, pos_b)
+            min_actual = min(
+                joint_travel_cost(ca[0], ca[1], cb[0], cb[1]) for cb in configs_b
+            )
+            if h_est > min_actual + 1e-9:
+                # Found a genuine overestimate — inadmissibility confirmed.
+                assert h_est > min_actual, (
+                    f"h_euclidean ({h_est:.6f}) > min_actual ({min_actual:.6f}): "
+                    "heuristic is inadmissible for wide-search perturbed configs"
+                )
+                counterexample_found = True
+                break
+        if counterexample_found:
+            break
+
+    assert counterexample_found, (
+        "Expected to find an inadmissible overestimate on Ode to Joy wide configs "
+        "but none was found — check _wide_configs or the melody data"
     )
 
 
 def test_h_euclidean_zero_at_target():
-    """Heuristic should be (near) zero when already at the target position."""
+    """Heuristic should be (near) zero when the arm tip is already at target_pos."""
     from src.robotics.kinematics import inverse_kinematics
     pos = ALL_KEYS["E4"]
+    # exact IK solution — tip lands at E4
     sol = inverse_kinematics(pos, elbow_up=True)
     assert sol is not None
     h = h_euclidean_endeffector(sol, pos)
-    assert h < 1e-9, f"h_euclidean at target should be ~0, got {h}"
+    assert h < 1e-9, f"h_euclidean at exact target should be ~0, got {h}"
 
 
 def test_h_combined_ge_components():
-    """h_combined must be >= both individual components everywhere."""
+    """h_combined = max(...) so it must be >= both individual components."""
     from src.robotics.kinematics import inverse_kinematics
     for note_from, note_to in [("C4", "G4"), ("E4", "B4"), ("F4", "C5")]:
         if note_from not in ALL_KEYS or note_to not in ALL_KEYS:
@@ -301,15 +355,18 @@ def test_h_combined_ge_components():
         if sol is None:
             continue
         pos_to = ALL_KEYS[note_to]
-        h_js  = joint_space_heuristic(sol, pos_to)
-        h_eu  = h_euclidean_endeffector(sol, pos_to)
+        h_js   = joint_space_heuristic(sol, pos_to)
+        h_eu   = h_euclidean_endeffector(sol, pos_to)
         h_comb = h_combined(sol, pos_to)
         assert h_comb >= h_js  - 1e-12
         assert h_comb >= h_eu  - 1e-12
 
 
-def test_h_combined_is_admissible():
-    """h_combined must never exceed the true one-step joint travel."""
+def test_h_combined_admissible_for_exact_ik_configs():
+    """
+    h_combined is admissible when starting from an exact IK config (same
+    precondition as h_euclidean_endeffector).  Verifies C4→G4.
+    """
     from src.robotics.kinematics import inverse_kinematics
     from src.planning.heuristics import joint_travel_cost
     pos_c4 = ALL_KEYS["C4"]
@@ -317,14 +374,14 @@ def test_h_combined_is_admissible():
     start = inverse_kinematics(pos_c4, elbow_up=True)
     assert start is not None
     h = h_combined(start, pos_g4)
-    costs = []
-    for eu in (True, False):
-        sol = inverse_kinematics(pos_g4, elbow_up=eu)
-        if sol is not None:
-            costs.append(joint_travel_cost(start[0], start[1], sol[0], sol[1]))
-    true_cost = min(costs)
-    assert h <= true_cost + 1e-9, (
-        f"h_combined ({h:.6f}) exceeds true cost ({true_cost:.6f})"
+    costs = [
+        joint_travel_cost(start[0], start[1], sol[0], sol[1])
+        for eu in (True, False)
+        for sol in [inverse_kinematics(pos_g4, elbow_up=eu)]
+        if sol is not None
+    ]
+    assert h <= min(costs) + 1e-9, (
+        f"h_combined ({h:.6f}) exceeds true cost ({min(costs):.6f})"
     )
 
 
@@ -346,23 +403,42 @@ def test_combined_instrumented_returns_plan_result():
     assert result.runtime_ms >= 0.0
 
 
-def test_euclidean_instrumented_optimal_cost():
-    """Euclidean-heuristic A* must find the same optimal cost as UCS."""
+def test_euclidean_instrumented_optimal_cost_twinkle():
+    """
+    Euclidean A* happens to find the optimal cost on Twinkle (no repeated-note
+    steps, so the inadmissible region is not triggered).
+    """
     pos = resolve_melody(TWINKLE)
     ucs_cost = total_joint_travel(ucs_plan(pos))
     eu_cost  = total_joint_travel(astar_plan_wide_instrumented_euclidean(pos).plan)
     assert abs(eu_cost - ucs_cost) < 1e-6, (
-        f"Euclidean A* ({eu_cost:.6f}) diverges from UCS ({ucs_cost:.6f})"
+        f"Euclidean A* ({eu_cost:.6f}) diverges from UCS ({ucs_cost:.6f}) on Twinkle"
     )
 
 
-def test_combined_instrumented_optimal_cost():
-    """Combined-heuristic A* must find the same optimal cost as UCS."""
+def test_euclidean_instrumented_suboptimal_ode_to_joy():
+    """
+    Euclidean A* returns a suboptimal plan on Ode to Joy because the heuristic
+    is inadmissible for wide-search perturbed configs (repeated-note overestimate).
+    This test asserts the known suboptimality as a documented behaviour.
+    """
+    from src.music.resolver import ODE_TO_JOY
+    pos = resolve_melody(ODE_TO_JOY)
+    ucs_cost = total_joint_travel(ucs_plan(pos))
+    eu_cost  = total_joint_travel(astar_plan_wide_instrumented_euclidean(pos).plan)
+    assert eu_cost > ucs_cost + 1e-6, (
+        f"Expected euclidean A* to be suboptimal on Ode to Joy "
+        f"(eu={eu_cost:.6f}, ucs={ucs_cost:.6f})"
+    )
+
+
+def test_combined_instrumented_optimal_cost_twinkle():
+    """Combined-heuristic A* finds optimal cost on Twinkle."""
     pos = resolve_melody(TWINKLE)
-    ucs_cost   = total_joint_travel(ucs_plan(pos))
-    comb_cost  = total_joint_travel(astar_plan_wide_instrumented_combined(pos).plan)
+    ucs_cost  = total_joint_travel(ucs_plan(pos))
+    comb_cost = total_joint_travel(astar_plan_wide_instrumented_combined(pos).plan)
     assert abs(comb_cost - ucs_cost) < 1e-6, (
-        f"Combined A* ({comb_cost:.6f}) diverges from UCS ({ucs_cost:.6f})"
+        f"Combined A* ({comb_cost:.6f}) diverges from UCS ({ucs_cost:.6f}) on Twinkle"
     )
 
 
