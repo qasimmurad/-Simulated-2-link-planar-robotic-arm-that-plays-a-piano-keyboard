@@ -1,16 +1,16 @@
 melody,notes,algorithm,heuristic,admissible,cost,optimal,nodes,runtime_ms
-twinkle,14,greedy,none,n/a,1.124345,no,0,0.339
-twinkle,14,ucs,none (h=0),yes,0.915058,yes,67,4.13
-twinkle,14,astar,"joint-space (wide, 6 configs)",yes,0.915058,yes,57,4.506
-twinkle,14,astar,euclidean end-effector,no (wide-config perturbed-tip counterexample),0.915058,yes,60,3.082
-twinkle,14,astar,combined (max of above two),no (wide-config perturbed-tip counterexample),0.915058,yes,56,5.506
-mary,13,greedy,none,n/a,1.031201,no,0,0.317
-mary,13,ucs,none (h=0),yes,0.909957,yes,51,3.127
-mary,13,astar,"joint-space (wide, 6 configs)",yes,0.909957,yes,47,4.651
-mary,13,astar,euclidean end-effector,no (wide-config perturbed-tip counterexample),0.909957,yes,45,1.652
-mary,13,astar,combined (max of above two),no (wide-config perturbed-tip counterexample),0.909957,yes,44,6.633
-ode_to_joy,15,greedy,none,n/a,1.080098,no,0,0.166
-ode_to_joy,15,ucs,none (h=0),yes,0.971655,yes,69,2.786
-ode_to_joy,15,astar,"joint-space (wide, 6 configs)",yes,0.971655,yes,64,5.147
-ode_to_joy,15,astar,euclidean end-effector,no (wide-config perturbed-tip counterexample),0.979564,no,65,4.691
-ode_to_joy,15,astar,combined (max of above two),no (wide-config perturbed-tip counterexample),0.979564,no,63,5.457
+twinkle,14,greedy,none,n/a,1.124345,no,0,0.161
+twinkle,14,ucs,none (h=0),yes,0.915058,yes,66,2.381
+twinkle,14,astar,"joint-space (wide, 6 configs)",yes,0.915058,yes,57,4.233
+twinkle,14,astar,euclidean end-effector,no (wide-config perturbed-tip counterexample),0.915058,yes,60,1.939
+twinkle,14,astar,combined (max of above two),no (wide-config perturbed-tip counterexample),0.915058,yes,56,8.338
+mary,13,greedy,none,n/a,1.031201,no,0,0.354
+mary,13,ucs,none (h=0),yes,0.909957,yes,51,3.153
+mary,13,astar,"joint-space (wide, 6 configs)",yes,0.909957,yes,47,4.951
+mary,13,astar,euclidean end-effector,no (wide-config perturbed-tip counterexample),0.909957,yes,45,3.371
+mary,13,astar,combined (max of above two),no (wide-config perturbed-tip counterexample),0.909957,yes,44,11.053
+ode_to_joy,15,greedy,none,n/a,1.080098,no,0,0.172
+ode_to_joy,15,ucs,none (h=0),yes,0.971655,yes,69,3.844
+ode_to_joy,15,astar,"joint-space (wide, 6 configs)",yes,0.971655,yes,64,5.238
+ode_to_joy,15,astar,euclidean end-effector,no (wide-config perturbed-tip counterexample),0.979564,no,65,2.093
+ode_to_joy,15,astar,combined (max of above two),no (wide-config perturbed-tip counterexample),0.979564,no,63,8.932

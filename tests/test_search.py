@@ -70,8 +70,12 @@ def test_total_joint_travel_single():
 # --- astar_plan_wide tests ---
 
 def test_wide_configs_count():
-    """Every reachable key should yield exactly 6 wide configs (2 IK × 3 deltas)."""
+    """Every REACHABLE key should yield exactly 6 wide configs (2 IK × 3 deltas).
+    Unreachable keys (far octaves after the 5-octave expansion) return 0 by design."""
+    from src.robotics.kinematics import is_reachable
     for note, pos in ALL_KEYS.items():
+        if not is_reachable(pos):
+            continue
         cfgs = _wide_configs(pos)
         assert len(cfgs) == 6, f"{note}: expected 6 wide configs, got {len(cfgs)}"
 

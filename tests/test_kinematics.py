@@ -49,12 +49,24 @@ def test_unreachable_target():
 
 def test_is_reachable_all_white_keys():
     """
-    All white keys should be reachable given our arm parameters.
-    If this fails, adjust L1, L2, or BASE in keyboard_layout.py.
+    Melody-range keys (C4–C5 octave) must be reachable.
+    Far-octave extremes must NOT be reachable — this confirms the 5-octave
+    keyboard produces a meaningful workspace boundary for the reachability
+    figure (the whole point of the expansion).
+    If melody keys are unreachable, adjust BASE or L1/L2 in keyboard_layout.py.
     """
     from data.keyboard_layout import WHITE_KEYS
-    for note, pos in WHITE_KEYS.items():
-        assert is_reachable(pos), f"{note} at {pos} is not reachable — check arm parameters"
+    melody_notes = ["C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5"]
+    for note in melody_notes:
+        assert is_reachable(WHITE_KEYS[note]), (
+            f"{note} at {WHITE_KEYS[note]} must be reachable — adjust arm parameters"
+        )
+    # Extreme keys must be outside the workspace (validates the reachability analysis)
+    far_notes = [n for n in ("C2", "D2", "C7", "B6") if n in WHITE_KEYS]
+    for note in far_notes:
+        assert not is_reachable(WHITE_KEYS[note]), (
+            f"{note} at {WHITE_KEYS[note]} should be unreachable at the workspace extreme"
+        )
 
 
 def test_elbow_up_and_down_both_valid():
